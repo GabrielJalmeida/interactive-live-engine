@@ -1,0 +1,4 @@
+fastapi==0.128.2
+pydantic-settings==2.14.1
+python-dotenv==1.2.2
+uvicorn==0.48.0

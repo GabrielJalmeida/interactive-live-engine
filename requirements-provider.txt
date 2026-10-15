@@ -1,0 +1,3 @@
+# Optional external provider dependency. Install only when preparing the TikTok LIVE adapter.
+-r requirements.txt
+TikTokLive==7.0.1

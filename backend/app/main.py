@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from backend.app.api.engine_state import router as engine_state_router
 from backend.app.api.experiences import router as experiences_router
 from backend.app.api.health import router as health_router
+from backend.app.api.providers import router as providers_router
 from backend.app.api.realtime_harness import router as realtime_harness_router
 from backend.app.api.websocket import router as websocket_router
 from backend.app.application.event_ingestion import (
@@ -23,8 +24,13 @@ from backend.app.application.event_ingestion import (
     InMemoryEventDeduplicationStore,
 )
 from backend.app.config import Settings
+from backend.app.experiences.provider_diagnostics import (
+    ProviderDiagnosticsExperience,
+    register_provider_diagnostics,
+)
 from backend.app.persistence.database import create_database_engine, create_session_factory
 from backend.app.persistence.event_repository import SqlAlchemyEventStore
+from backend.app.providers.tiktok_live import TikTokLiveAdapter
 from backend.app.realtime.realtime_manager import RealtimeManager
 from backend.app.runtime.engine_runtime import EngineRuntime
 from backend.app.runtime.experience_manager import NoActiveExperienceError
@@ -42,6 +48,7 @@ def create_app(
     runtime: EngineRuntime | None = None,
     realtime_manager: RealtimeManager | None = None,
     event_deduplication_store: EventDeduplicationPort | None = None,
+    tiktok_live_adapter: TikTokLiveAdapter | None = None,
 ) -> FastAPI:
     """Create the application and wire concrete persistence/realtime adapters explicitly."""
 
@@ -78,13 +85,50 @@ def create_app(
         owned_database_engine = create_database_engine(resolved_settings.database_url)
         deduplication_store = SqlAlchemyEventStore(create_session_factory(owned_database_engine))
 
+    ingestion_service = EventIngestionService(resolved_runtime, deduplication_store)
+    resolved_tiktok_adapter = tiktok_live_adapter or TikTokLiveAdapter(
+        ingestion_service,
+        enabled=resolved_settings.tiktok_live_enabled,
+        username=resolved_settings.tiktok_live_username,
+    )
+
+    auto_started_diagnostics = False
+
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        nonlocal auto_started_diagnostics
         try:
+            if resolved_settings.tiktok_live_enabled:
+                if resolved_runtime.manager.active_slug is None:
+                    if (
+                        resolved_settings.tiktok_live_diagnostics_enabled
+                        and resolved_settings.app_env in {"development", "test"}
+                    ):
+                        register_provider_diagnostics(resolved_runtime)
+                        await resolved_runtime.start_experience(ProviderDiagnosticsExperience.slug)
+                        auto_started_diagnostics = True
+                    else:
+                        raise RuntimeError(
+                            "TikTok LIVE is enabled but no Experience is active. Start an "
+                            "Experience or set TIKTOK_LIVE_DIAGNOSTICS_ENABLED=true for a "
+                            "development/test session."
+                        )
+                await resolved_tiktok_adapter.start()
             yield
         finally:
-            if owned_database_engine is not None:
-                owned_database_engine.dispose()
+            try:
+                await resolved_tiktok_adapter.stop()
+            finally:
+                try:
+                    if (
+                        auto_started_diagnostics
+                        and resolved_runtime.manager.active_slug
+                        == ProviderDiagnosticsExperience.slug
+                    ):
+                        await resolved_runtime.stop_experience()
+                finally:
+                    if owned_database_engine is not None:
+                        owned_database_engine.dispose()
 
     application = FastAPI(
         title="Interactive Live Engine",
@@ -100,6 +144,7 @@ def create_app(
     application.state.engine_runtime = resolved_runtime
     application.state.realtime_manager = resolved_realtime
     application.state.event_deduplication_store = deduplication_store
+    application.state.tiktok_live_adapter = resolved_tiktok_adapter
 
     @application.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
@@ -156,17 +201,19 @@ def create_app(
     application.include_router(experiences_router)
     application.include_router(websocket_router)
     application.include_router(realtime_harness_router)
+    application.include_router(providers_router)
 
     # The provider adapter in the LIVE environment must use the same ingestion service;
     # only the HTTP simulation route is restricted to development/test.
-    application.state.event_ingestion_service = EventIngestionService(
-        resolved_runtime,
-        deduplication_store,
-    )
+    application.state.event_ingestion_service = ingestion_service
     if resolved_settings.app_env in {"development", "test"}:
         from backend.app.api.dev_events import router as dev_events_router
+        from backend.app.api.dev_provider_diagnostics import (
+            router as dev_provider_diagnostics_router,
+        )
 
         application.include_router(dev_events_router)
+        application.include_router(dev_provider_diagnostics_router)
 
     return application
 

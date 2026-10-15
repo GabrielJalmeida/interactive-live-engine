@@ -535,3 +535,109 @@ def test_fake_provider_event_traverses_adapter_runtime_diagnostics_and_websocket
             assert adapter.snapshot()["processed_events"] == 1
 
     assert runtime.state()["active_experience"] is None
+
+
+def test_fake_provider_event_persists_and_deduplicates_through_sqlite(tmp_path):
+    from sqlalchemy import select
+
+    from backend.app.application.event_ingestion import EventIngestionService
+    from backend.app.persistence.database import (
+        create_database_engine,
+        create_session_factory,
+    )
+    from backend.app.persistence.event_repository import SqlAlchemyEventStore
+    from backend.app.persistence.models import Base, LiveEventRecord
+    from backend.app.realtime.realtime_manager import RealtimeManager
+    from backend.app.runtime.engine_runtime import EngineRuntime
+
+    database_path = (tmp_path / "provider-integration.db").as_posix()
+    engine = create_database_engine(f"sqlite:///{database_path}")
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+    store = SqlAlchemyEventStore(session_factory)
+
+    clients: list[FakeTikTokClient] = []
+    realtime = RealtimeManager()
+    runtime = EngineRuntime(output_publisher=realtime)
+    ingestion = EventIngestionService(runtime, store)
+
+    adapter = TikTokLiveAdapter(
+        ingestion,
+        enabled=True,
+        username="streamer",
+        bindings=make_bindings(clients),
+    )
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        tiktok_live_enabled=True,
+        tiktok_live_username="streamer",
+        tiktok_live_diagnostics_enabled=True,
+    )
+    app = create_app(
+        settings,
+        runtime=runtime,
+        realtime_manager=realtime,
+        event_deduplication_store=store,
+        tiktok_live_adapter=adapter,
+    )
+
+    comment = "comment must stay private"
+    username = "viewer_42"
+    provider_event = SimpleNamespace(
+        comment=comment,
+        common=SimpleNamespace(msg_id="tiktok-message-001"),
+        user=SimpleNamespace(
+            id=42,
+            unique_id=username,
+            nickname="Private Viewer",
+        ),
+    )
+
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/events") as websocket:
+                assert websocket.receive_json()["type"] == "SYSTEM_READY"
+                assert client.portal is not None
+
+                client.portal.call(
+                    clients[0].emit,
+                    FakeEventTypes.CommentEvent,
+                    provider_event,
+                )
+                output = websocket.receive_json()
+
+                assert output["type"] == "PROVIDER_EVENT_RECEIVED"
+                assert output["data"]["event_type"] == "COMMENT"
+                assert output["data"]["text_length"] == len(comment)
+                assert comment not in str(output)
+                assert username not in str(output)
+                assert "Private Viewer" not in str(output)
+
+                # The same external identity must not dispatch or publish twice.
+                client.portal.call(
+                    clients[0].emit,
+                    FakeEventTypes.CommentEvent,
+                    provider_event,
+                )
+
+                status = adapter.snapshot()
+                assert status["processed_events"] == 1
+                assert status["duplicate_events"] == 1
+
+        with session_factory() as session:
+            records = session.scalars(select(LiveEventRecord)).all()
+
+            assert len(records) == 1
+            record = records[0]
+            assert record.provider == "tiktok"
+            assert record.event_type == "COMMENT"
+            assert record.provider_event_id == "tiktok-message-001"
+            assert record.processing_status == "PROCESSED"
+            assert record.payload == {"text": comment}
+            assert record.viewer_data == {
+                "provider_user_id": "42",
+                "username": username,
+            }
+    finally:
+        engine.dispose()

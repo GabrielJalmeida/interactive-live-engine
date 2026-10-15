@@ -7,10 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Settings for the bootstrap phase.
-
-    Add infrastructure settings here only when the owning implementation slice needs them.
-    """
+    """Validated application settings. Infrastructure knobs are added with their owning slice."""
 
     model_config = SettingsConfigDict(
         env_file=".env",

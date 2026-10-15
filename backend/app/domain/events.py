@@ -86,7 +86,7 @@ def _json_depth(value: JsonValue) -> int:
     return 0
 
 
-def _validate_json_object_limits(value: dict[str, JsonValue]) -> None:
+def validate_json_object_limits(value: dict[str, JsonValue]) -> None:
     """Enforce consistent encoded-size and nesting limits for JSON object fields."""
 
     try:
@@ -152,7 +152,7 @@ class LiveEvent(DomainContract):
 
     @model_validator(mode="after")
     def validate_payload_limits(self) -> LiveEvent:
-        _validate_json_object_limits(self.payload)
+        validate_json_object_limits(self.payload)
         return self
 
 
@@ -173,5 +173,5 @@ class OutputEvent(DomainContract):
 
     @model_validator(mode="after")
     def validate_data_limits(self) -> OutputEvent:
-        _validate_json_object_limits(self.data)
+        validate_json_object_limits(self.data)
         return self

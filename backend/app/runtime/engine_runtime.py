@@ -85,7 +85,9 @@ class EngineRuntime:
 
         active_slug = self.manager.active_slug
         if active_slug is None:
-            raise NoActiveExperienceError("Cannot publish Experience outputs without an active Experience")
+            raise NoActiveExperienceError(
+                "Cannot publish Experience outputs without an active Experience"
+            )
 
         for index, output in enumerate(output_batch):
             if not isinstance(output, OutputEvent):

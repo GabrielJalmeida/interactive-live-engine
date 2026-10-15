@@ -20,16 +20,20 @@ class EventDeduplicationPort(Protocol):
 
     ``reserve`` returns the original internal event UUID when the incoming external
     identity was already seen, or ``None`` when the key is new/not eligible for dedupe.
-    ``release`` removes a reservation after dispatch failed, allowing a deliberate retry.
-    A persistent implementation will replace the in-memory adapter in the persistence slice.
+    ``mark_processed`` records successful Experience execution before output publication.
+    ``release`` records dispatch failure and releases a key so a deliberate retry is possible.
     """
 
     async def reserve(self, event: LiveEvent) -> UUID | None:
         """Reserve an eligible provider key; return the original event ID on duplicate."""
         ...
 
+    async def mark_processed(self, event: LiveEvent) -> None:
+        """Persist that the Experience handled this event successfully."""
+        ...
+
     async def release(self, event: LiveEvent) -> None:
-        """Release this event's reservation if it owns the key."""
+        """Mark a failed dispatch and release its dedupe claim when it owns the key."""
         ...
 
 
@@ -38,12 +42,15 @@ class InMemoryEventDeduplicationStore:
 
     def __init__(self) -> None:
         self._seen: dict[tuple[str, str], UUID] = {}
+        self._statuses: dict[UUID, str] = {}
         self._lock = asyncio.Lock()
 
     async def reserve(self, event: LiveEvent) -> UUID | None:
         provider_event_id = event.provider_event_id
-        if provider_event_id is None:
-            return None
+        async with self._lock:
+            if provider_event_id is None:
+                self._statuses[event.event_id] = "RECEIVED"
+                return None
 
         key = (event.provider.value, provider_event_id)
         async with self._lock:
@@ -51,17 +58,22 @@ class InMemoryEventDeduplicationStore:
             if original_event_id is not None:
                 return original_event_id
             self._seen[key] = event.event_id
+            self._statuses[event.event_id] = "RECEIVED"
             return None
+
+    async def mark_processed(self, event: LiveEvent) -> None:
+        """Track processed state for deterministic unit/integration tests."""
+
+        async with self._lock:
+            self._statuses[event.event_id] = "PROCESSED"
 
     async def release(self, event: LiveEvent) -> None:
         provider_event_id = event.provider_event_id
-        if provider_event_id is None:
-            return
-
-        key = (event.provider.value, provider_event_id)
+        key = (event.provider.value, provider_event_id) if provider_event_id is not None else None
         async with self._lock:
-            if self._seen.get(key) == event.event_id:
+            if key is not None and self._seen.get(key) == event.event_id:
                 del self._seen[key]
+            self._statuses[event.event_id] = "FAILED"
 
 
 class EventProcessingError(RuntimeError):
@@ -78,6 +90,14 @@ class EventPublicationError(RuntimeError):
     def __init__(self, event_id: UUID) -> None:
         self.event_id = event_id
         super().__init__(f"Failed to publish outputs for event '{event_id}'")
+
+
+class EventPersistenceError(RuntimeError):
+    """Raised when a successful dispatch cannot be marked durably processed."""
+
+    def __init__(self, event_id: UUID) -> None:
+        self.event_id = event_id
+        super().__init__(f"Failed to persist processing status for event '{event_id}'")
 
 
 class EventIngestionResult(BaseModel):
@@ -109,7 +129,15 @@ class EventIngestionService:
     async def ingest(self, event: LiveEvent) -> EventIngestionResult:
         """Process one normalized event and report duplicate attempts deterministically."""
 
-        duplicate_of_event_id = await self._deduplication_store.reserve(event)
+        try:
+            duplicate_of_event_id = await self._deduplication_store.reserve(event)
+        except Exception as exc:
+            self._logger.exception(
+                "Failed to persist event receipt or reserve deduplication key",
+                extra=self._event_log_context(event),
+            )
+            raise EventPersistenceError(event.event_id) from exc
+
         if duplicate_of_event_id is not None:
             return EventIngestionResult(
                 status="duplicate",
@@ -132,9 +160,18 @@ class EventIngestionService:
             )
             raise EventProcessingError(event.event_id) from exc
 
-        # Keep the reservation once the Experience has processed the event. If delivery
-        # later fails, blindly retrying could execute gameplay side effects twice; durable
-        # output delivery is intentionally deferred to the outbox/reliability slice.
+        # Persist processing success before publishing. If publication subsequently fails,
+        # the reservation remains so a retried provider event cannot run gameplay twice.
+        try:
+            await self._deduplication_store.mark_processed(event)
+        except Exception as exc:
+            self._logger.exception(
+                "Experience processed the event but persistence of its status failed",
+                extra=self._event_log_context(event),
+            )
+            # Keep the reservation: releasing it could cause a duplicate gameplay side effect.
+            raise EventPersistenceError(event.event_id) from exc
+
         try:
             delivered_clients = await self._runtime.publish(outputs)
         except BaseException as exc:

@@ -2,7 +2,7 @@
 
 Infraestrutura modular e reutilizável para desenvolver experiências interativas controladas por eventos de transmissões ao vivo.
 
-**Estado atual:** Fase 4 — ingestão e Dev Event API. O projeto inclui contratos de domínio, Runtime/Experience, WebSocket server-to-client, `EventIngestionService` e endpoint de simulação restrito a development/test. A deduplicação nesta fase vive em memória; persistência, provider TikTok e entrega durável ainda não foram implementados.
+**Estado atual:** Fase 5 — persistência de eventos e deduplicação. O projeto inclui contratos de domínio, Runtime/Experience, WebSocket, ingestão e uma store SQLAlchemy com migração Alembic. O provider TikTok e a entrega durável de outputs ainda não foram implementados.
 
 ## Princípios
 
@@ -54,6 +54,25 @@ Dev Event API: `POST /api/v1/dev/events` (somente development/test). O endpoint 
 
 WebSocket: `ws://127.0.0.1:8000/ws/events` (use `wss://` quando servido por HTTPS). A conexão recebe `SYSTEM_READY` e depois `OutputEvent`. O canal é somente server-to-client; mensagens de aplicação enviadas pelo cliente são encerradas com código `1008`. Browser origins devem ser same-origin. Mantenha o servidor no loopback por enquanto; não o exponha à rede pública sem autenticação, política de origem e configuração operacional próprias.
 
+## Banco e migrations
+
+A aplicação usa SQLite local por padrão. Caminhos relativos de SQLite são resolvidos a partir da raiz do repositório, independentemente da pasta atual do CMD. Em development/production, a store SQLAlchemy é composta pela aplicação; em `APP_ENV=test`, a store em memória é usada por padrão para manter testes isolados, podendo ser substituída por injeção explícita.
+
+Depois de instalar as dependências e criar o `.env`, aplique o esquema do banco:
+
+```bat
+python -m alembic upgrade head
+python -m alembic check
+```
+
+Para retornar ao esquema vazio durante desenvolvimento local, use `python -m alembic downgrade base` (isso remove as tabelas geridas pela migration). Não use downgrade em um banco com dados que precisem ser preservados.
+
+O histórico `live_event_records` preserva tentativas e estados `RECEIVED`, `PROCESSED` ou `FAILED`. A tabela `event_deduplication_keys` mantém uma chave única `(provider, provider_event_id)` para eventos elegíveis. Quando o dispatch falha, a tentativa permanece registrada como `FAILED`, e apenas sua chave de deduplicação é liberada para retry. IDs externos ausentes não podem ser deduplicados com segurança.
+
+A retenção inicial é de 7 dias (`EVENT_RECORD_RETENTION_DAYS`, configurável entre 1 e 365). A limpeza não roda silenciosamente dentro do servidor: execute `python -m scripts.purge_expired_event_records` por agendador operacional ou manualmente. Faça backup antes de qualquer manutenção em um banco que contenha dados importantes.
+
+O SQLite valida a lógica funcional local. A concorrência e as constraints do banco-alvo PostgreSQL ainda devem ser verificadas antes de declarar a persistência pronta para operação sustentada. Não há garantia geral de exactly-once nem outbox nesta fase.
+
 ## Testes e qualidade
 
 ```bat
@@ -87,10 +106,12 @@ python -m ruff format --check .
 - [x] Adicionar `POST /api/v1/dev/events`, schemas estritos e resposta `processed`/`duplicate`.
 - [x] Restringir Dev Event API aos ambientes development/test, omitindo-a em production.
 - [x] Cobrir dispatch, publicação, duplicidade, payload inválido, falha, retry e ausência de Experience.
-- [ ] Substituir deduplicação volátil pela persistência/constraint de banco na Fase 5.
-- [ ] Registrar o checkpoint Git da Fase 3 após os testes locais.
-- [ ] Validar ingestão no ambiente-alvo e registrar o checkpoint Git da Fase 4.
+- [x] Substituir deduplicação volátil pela store SQLAlchemy e constraint composta na Fase 5.
+- [x] Validar o realtime no ambiente-alvo e recuperar a estrutura canônica do projeto.
+- [x] Testar migrations a partir de banco vazio e persistência/deduplicação no SQLite.
+- [ ] Executar testes e lint/format desta fase no ambiente-alvo.
+- [ ] Validar concorrência no PostgreSQL antes de operação sustentada.
 
 ## Segurança e escopo
 
-Não há provider TikTok ativo nem persistência nesta fase. A deduplicação do Dev Event API é apenas em memória e será perdida quando o processo reiniciar. O realtime usa entrega em memória e best-effort: desconexão significa que uma mensagem pode ser perdida; replay, outbox e entrega durável continuam fora do MVP atual. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.
+Não há provider TikTok ativo nesta fase. A deduplicação é persistente no banco configurado quando usada a store SQLAlchemy; testes podem usar a store em memória. O realtime usa entrega em memória e best-effort: desconexão significa que uma mensagem pode ser perdida; replay, outbox e entrega durável continuam fora do MVP atual. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.

@@ -21,3 +21,5 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     websocket_send_timeout_seconds: float = Field(default=2.0, gt=0, le=30.0)
+    database_url: str = "sqlite:///./data/interactive_live_engine.db"
+    event_record_retention_days: int = Field(default=7, ge=1, le=365)

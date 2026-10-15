@@ -2,7 +2,7 @@
 
 Infraestrutura modular e reutilizável para desenvolver experiências interativas controladas por eventos de transmissões ao vivo.
 
-**Estado atual:** Fase 1 — contratos de evento. O bootstrap contém configuração central e health check; os contratos de domínio `EventType`, `EventProvider`, `Viewer`, `LiveEvent` e `OutputEvent` estão definidos e testados. Provider, Runtime, Experience, persistência, Dev API e WebSocket ainda não foram implementados.
+**Estado atual:** Fase 2 — Runtime e contrato de Experience. O projeto inclui os contratos de domínio, registro explícito de factories, ciclo de vida de uma Experience ativa, roteamento de eventos e endpoints de consulta do Runtime. Provider TikTok, pipeline de ingestão, persistência, Dev API e WebSocket ainda não foram implementados.
 
 ## Princípios
 
@@ -67,7 +67,11 @@ python -m ruff format --check .
 - [x] Definir `EventType`, `EventProvider`, `Viewer`, `LiveEvent` e `OutputEvent`.
 - [x] Validar timestamps UTC, schemas estritos e limites iniciais de JSON.
 - [x] Documentar o contrato e registrar ADR-002.
-- [ ] Confirmar a suíte e lint/format no ambiente-alvo do desenvolvedor.
+- [x] Definir `InteractiveExperience` e `ExperienceContext` com contexto consistente no lifecycle.
+- [x] Implementar `ExperienceLoader`, `ExperienceManager`, `EventRouter` e `EngineRuntime`.
+- [x] Adicionar `GET /api/v1/engine/state` e `GET /api/v1/experiences`.
+- [x] Validar lifecycle, erros, metadados e outputs com FakeExperience restrita aos testes.
+- [ ] Registrar o checkpoint Git da Fase 2 após validação no ambiente-alvo.
 
 ## Segurança e escopo
 

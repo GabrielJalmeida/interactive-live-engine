@@ -2,7 +2,7 @@
 
 Infraestrutura modular e reutilizável para desenvolver experiências interativas controladas por eventos de transmissões ao vivo.
 
-**Estado atual:** Fase 2 — Runtime e contrato de Experience. O projeto inclui os contratos de domínio, registro explícito de factories, ciclo de vida de uma Experience ativa, roteamento de eventos e endpoints de consulta do Runtime. Provider TikTok, pipeline de ingestão, persistência, Dev API e WebSocket ainda não foram implementados.
+**Estado atual:** Fase 3 — transporte realtime. O projeto inclui contratos de domínio, Runtime/Experience, `RealtimeManager`, WebSocket server-to-client versionado e um harness local para inspeção. O provider TikTok, pipeline de ingestão, persistência e Dev Event API ainda não foram implementados.
 
 ## Princípios
 
@@ -48,6 +48,10 @@ Health endpoint: <http://127.0.0.1:8000/api/v1/health>
 
 OpenAPI: <http://127.0.0.1:8000/docs>
 
+Harness WebSocket (development/test): <http://127.0.0.1:8000/dev/realtime-harness>
+
+WebSocket: `ws://127.0.0.1:8000/ws/events` (use `wss://` quando servido por HTTPS). A conexão recebe `SYSTEM_READY` e depois `OutputEvent`. O canal é somente server-to-client; mensagens de aplicação enviadas pelo cliente são encerradas com código `1008`. Browser origins devem ser same-origin. Mantenha o servidor no loopback por enquanto; não o exponha à rede pública sem autenticação, política de origem e configuração operacional próprias.
+
 ## Testes e qualidade
 
 ```bat
@@ -71,8 +75,14 @@ python -m ruff format --check .
 - [x] Implementar `ExperienceLoader`, `ExperienceManager`, `EventRouter` e `EngineRuntime`.
 - [x] Adicionar `GET /api/v1/engine/state` e `GET /api/v1/experiences`.
 - [x] Validar lifecycle, erros, metadados e outputs com FakeExperience restrita aos testes.
-- [ ] Registrar o checkpoint Git da Fase 2 após validação no ambiente-alvo.
+- [x] Registrar o checkpoint Git da Fase 2 após validação no ambiente-alvo.
+- [x] Implementar `RealtimeManager` com timeout de envio e falha isolada por conexão.
+- [x] Adicionar `WS /ws/events` com envelope inicial `SYSTEM_READY` e canal unidirecional.
+- [x] Ligar `EngineRuntime.publish()` ao publisher injetado sem acoplar o Runtime ao WebSocket concreto.
+- [x] Adicionar harness browser local, restrito a development/test.
+- [x] Testar broadcast, desconexão, timeout, erro individual e fluxo Runtime→WebSocket.
+- [ ] Validar a suíte realtime, lint/format no ambiente-alvo e registrar o checkpoint Git da Fase 3.
 
 ## Segurança e escopo
 
-Não há provider ativo, conexão externa, banco, Dev API ou comandos de gameplay nesta fase. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.
+Não há provider TikTok ativo, pipeline de ingestão, persistência nem Dev Event API nesta fase. O realtime usa entrega em memória e best-effort: desconexão significa que uma mensagem pode ser perdida; replay, outbox e entrega durável continuam fora do MVP atual. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.

@@ -7,7 +7,7 @@
 - `ExperienceLoader` mantém somente factories registradas explicitamente; não importa código pedido por clientes.
 - `ExperienceManager` possui no máximo uma Experience ativa, controla start/stop e valida outputs.
 - `EventRouter` encaminha `LiveEvent` ao manager sem interpretar gameplay.
-- `EngineRuntime` oferece a fachada de lifecycle/dispatch e estado conciso.
+- `EngineRuntime` oferece a fachada de lifecycle/dispatch, estado conciso e publicação explícita de outputs após o chamador considerar o processamento bem-sucedido.
 
 ## Decisões de lifecycle
 
@@ -27,4 +27,4 @@
 
 ## Limites atuais
 
-Não há provider, ingestion pipeline, persistência, realtime/WebSocket, comando de inicialização automática por `ACTIVE_EXPERIENCE` ou experiência de demonstração embarcada. Essas etapas terão seus próprios slices e critérios de aceite.
+Não há provider, ingestion pipeline, persistência nem comando de inicialização automática por `ACTIVE_EXPERIENCE`. O `EngineRuntime` recebe um `OutputPublisher` por injeção; `dispatch()` retorna outputs e `publish()` os envia separadamente para que a futura camada de ingestão possa ordenar registro/estado de processamento antes da publicação.

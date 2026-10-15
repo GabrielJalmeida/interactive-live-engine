@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive Live Engine — Realtime Harness</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151d; color: #e7edf4; }
+    body { margin: 0; padding: 2rem 1rem; max-width: 960px; margin-inline: auto; }
+    h1 { margin-bottom: .4rem; font-size: clamp(1.5rem, 4vw, 2.2rem); }
+    p { color: #aebccc; line-height: 1.5; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; margin: 1.5rem 0; }
+    button { border: 1px solid #526173; border-radius: .5rem; background: #202a37; color: inherit; padding: .65rem 1rem; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #91caff; outline-offset: 2px; }
+    #status { border-radius: .4rem; padding: .35rem .6rem; background: #293342; }
+    #status[data-state="connected"] { color: #a5f3c2; }
+    #status[data-state="disconnected"], #status[data-state="error"] { color: #ffb4b4; }
+    #messages { padding: 0; list-style: none; display: grid; gap: .6rem; }
+    #messages li { border: 1px solid #2f3b49; border-radius: .5rem; background: #171f29; padding: .8rem; }
+    #messages time { display: block; margin-bottom: .4rem; color: #9fb2c8; font-size: .8rem; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; }
+    .muted { font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>Interactive Live Engine</h1>
+  <p>Harness local para inspecionar o protocolo WebSocket. Esta página só recebe mensagens; não envia comandos de gameplay.</p>
+  <div class="toolbar">
+    <span id="status" data-state="disconnected" role="status" aria-live="polite">Desconectado</span>
+    <button id="connect" type="button">Conectar</button>
+    <button id="disconnect" type="button">Desconectar</button>
+    <button id="clear" type="button">Limpar mensagens</button>
+  </div>
+  <p class="muted">As últimas 100 mensagens são mantidas somente nesta página e não são enviadas para armazenamento.</p>
+  <ol id="messages" aria-label="Mensagens recebidas"></ol>
+  <script>
+    (() => {
+      const status = document.querySelector("#status");
+      const messages = document.querySelector("#messages");
+      let socket = null;
+
+      function setStatus(label, state) {
+        status.textContent = label;
+        status.dataset.state = state;
+      }
+
+      function appendMessage(data) {
+        const item = document.createElement("li");
+        const time = document.createElement("time");
+        const payload = document.createElement("pre");
+        time.textContent = new Date().toLocaleTimeString();
+        payload.textContent = JSON.stringify(data, null, 2);
+        item.append(time, payload);
+        messages.prepend(item);
+        while (messages.children.length > 100) messages.lastElementChild.remove();
+      }
+
+      function connect() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+        const url = new URL("/ws/events", window.location.href);
+        url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        setStatus("Conectando…", "connecting");
+        socket = new WebSocket(url);
+        socket.addEventListener("open", () => setStatus("Conectado", "connected"));
+        socket.addEventListener("message", event => {
+          try { appendMessage(JSON.parse(event.data)); }
+          catch { appendMessage({ type: "INVALID_JSON_MESSAGE", raw: String(event.data) }); }
+        });
+        socket.addEventListener("error", () => setStatus("Erro de conexão", "error"));
+        socket.addEventListener("close", () => setStatus("Desconectado", "disconnected"));
+      }
+
+      document.querySelector("#connect").addEventListener("click", connect);
+      document.querySelector("#disconnect").addEventListener("click", () => {
+        if (socket) socket.close(1000, "Closed by harness operator");
+      });
+      document.querySelector("#clear").addEventListener("click", () => { messages.replaceChildren(); });
+      connect();
+    })();
+  </script>
+</body>
+</html>

@@ -23,3 +23,4 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    websocket_send_timeout_seconds: float = Field(default=2.0, gt=0, le=30.0)

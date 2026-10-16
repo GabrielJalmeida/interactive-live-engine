@@ -74,9 +74,9 @@ TIKTOK_LIVE_ENABLED=true
 TIKTOK_LIVE_USERNAME=seu_usuario_sem_arroba
 ```
 
-Com `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=true`, a aplicação registra e ativa a Experience de diagnóstico **antes** de iniciar o listener. Ela emite `PROVIDER_EVENT_RECEIVED` com resumo sanitizado, sem reproduzir texto de comentários nem identidade do usuário. Essa Experience é uma ferramenta de teste, não gameplay, e o modo diagnóstico é recusado em `APP_ENV=production`.
+Quando `TIKTOK_LIVE_ENABLED=true` e `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=true`, em `development` ou `test`, a aplicação registra e inicia automaticamente a Experience de diagnóstico antes de iniciar o listener, caso ainda não exista uma Experience ativa. Habilitar somente a opção de diagnóstico não inicia uma conexão com o TikTok nem ativa automaticamente essa Experience.
 
-No dia do teste, inicie a sua transmissão primeiro e, em outra janela, rode `python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000`. Depois abra <http://127.0.0.1:8000/dev/realtime-harness> e observe os outputs; consulte <http://127.0.0.1:8000/api/v1/providers/tiktok> para comparar eventos recebidos e processados. Se o canal estiver offline ou o provider falhar ao iniciar, a inicialização da aplicação falha deliberadamente em vez de fingir que a conexão está pronta. No fim da sessão, desligue o servidor e volte `TIKTOK_LIVE_ENABLED=false` e `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=false`. Não habilite essas opções antes do dia de teste.
+No dia do teste, inicie a sua transmissão primeiro e, em outra janela, rode `python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000`. Depois abra <http://127.0.0.1:8000/dev/realtime-harness> e observe os outputs; consulte <http://127.0.0.1:8000/api/v1/providers/tiktok> para comparar eventos recebidos e processados. Se o SDK lançar uma exceção durante a inicialização do provider, a inicialização da aplicação falha deliberadamente, em vez de fingir que a conexão está pronta. Se a tarefa de conexão falhar depois que a aplicação iniciou, o adaptador registra o estado `failed` e um código de erro sanitizado; consulte `GET /api/v1/providers/tiktok` e os logs para diagnosticar a ocorrência. O comportamento diante de uma transmissão offline ainda precisa ser confirmado no teste real agendado. No fim da sessão, desligue o servidor e volte `TIKTOK_LIVE_ENABLED=false` e `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=false`. Não habilite essas opções antes do dia de teste.
 
 Para simular sem uma live, mantenha `TIKTOK_LIVE_ENABLED=false`, inicie a aplicação e use `POST /api/v1/dev/provider-diagnostics/start`; então envie evento(s) ao `POST /api/v1/dev/events`. Essas rotas não existem em production.
 
@@ -143,7 +143,7 @@ python -m ruff format --check .
 - [x] Substituir deduplicação volátil pela store SQLAlchemy e constraint composta na Fase 5.
 - [x] Validar o realtime no ambiente-alvo e recuperar a estrutura canônica do projeto.
 - [x] Testar migrations a partir de banco vazio e persistência/deduplicação no SQLite.
-- [ ] Executar testes e lint/format desta fase no ambiente-alvo.
+- [x] Executar testes e lint/format desta fase no ambiente-alvo.
 - [ ] Validar concorrência no PostgreSQL antes de operação sustentada.
 
 ## Segurança e escopo

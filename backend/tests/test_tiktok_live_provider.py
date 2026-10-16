@@ -34,16 +34,29 @@ class FakeIngestionService:
         return SimpleNamespace(status=self.result_status)
 
 
+class FakeTikTokWebClient:
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.closed = True
+
+
 class FakeTikTokClient:
     def __init__(self, *, unique_id: str) -> None:
         self.unique_id = unique_id
         self.listeners: dict[type[object], Callable[[object], Awaitable[None]]] = {}
         self.started = False
         self.disconnected = False
+        self.disconnect_calls = 0
         self._finish = asyncio.Event()
         self.connection_task: asyncio.Task[None] | None = None
         self.fetch_live_check: bool | None = None
         self.close_client: bool | None = None
+        self.disconnect_error: Exception | None = None
+        self.web = FakeTikTokWebClient()
 
     def add_listener(
         self, event_type: type[object], listener: Callable[[object], Awaitable[None]]
@@ -57,9 +70,13 @@ class FakeTikTokClient:
         return self.connection_task
 
     async def disconnect(self, close_client: bool = False) -> None:
+        self.disconnect_calls += 1
         self.disconnected = True
         self.close_client = close_client
         self._finish.set()
+
+        if self.disconnect_error is not None:
+            raise self.disconnect_error
 
     async def emit(self, event_cls: type[object], event: object) -> None:
         await self.listeners[event_cls](event)
@@ -229,8 +246,13 @@ async def test_adapter_registers_handlers_normalizes_events_and_stops_client() -
 
     await adapter.stop()
     assert client.disconnected is True
-    assert client.close_client is True
+    assert client.close_client is False
+    assert client.web.closed is True
+    assert client.web.close_calls == 1
     assert adapter.snapshot()["status"] == "stopped"
+    await adapter.stop()
+    assert client.disconnect_calls == 1
+    assert client.web.close_calls == 1
 
 
 @pytest.mark.asyncio
@@ -251,6 +273,110 @@ async def test_connection_task_completion_updates_status_even_without_connect_ev
 
     assert adapter.snapshot()["status"] == "disconnected"
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_adapter_closes_http_client_when_disconnect_times_out() -> None:
+    clients: list[FakeTikTokClient] = []
+
+    class HangingDisconnectClient(FakeTikTokClient):
+        async def disconnect(self, close_client: bool = False) -> None:
+            self.disconnect_calls += 1
+            self.disconnected = True
+            self.close_client = close_client
+            self._finish.set()
+
+            # Simulate a disconnect operation that never finishes.
+            await asyncio.Event().wait()
+
+    def factory(*, unique_id: str) -> FakeTikTokClient:
+        client = HangingDisconnectClient(unique_id=unique_id)
+        clients.append(client)
+        return client
+
+    adapter = TikTokLiveAdapter(
+        FakeIngestionService(),
+        enabled=True,
+        username="streamer",
+        bindings=TikTokLiveBindings(
+            client_factory=factory,
+            event_types=EVENT_BINDINGS,
+        ),
+        shutdown_timeout_seconds=0.01,
+    )
+
+    await adapter.start()
+    client = clients[0]
+
+    await adapter.stop()
+
+    assert client.disconnect_calls == 1
+    assert client.close_client is False
+    assert client.web.closed is True
+    assert client.web.close_calls == 1
+    assert adapter.snapshot()["status"] == "stopped"
+    assert adapter.snapshot()["last_error_code"] == "provider_stop_timeouterror"
+
+
+@pytest.mark.asyncio
+async def test_adapter_closes_http_client_when_disconnect_fails(caplog) -> None:
+    clients: list[FakeTikTokClient] = []
+    adapter = TikTokLiveAdapter(
+        FakeIngestionService(),
+        enabled=True,
+        username="streamer",
+        bindings=make_bindings(clients),
+    )
+
+    await adapter.start()
+    client = clients[0]
+    client.disconnect_error = RuntimeError("private disconnect details")
+
+    await adapter.stop()
+
+    assert client.disconnected is True
+    assert client.close_client is False
+    assert client.web.closed is True
+    assert client.web.close_calls == 1
+    assert adapter.snapshot()["status"] == "stopped"
+    assert adapter.snapshot()["last_error_code"] == "provider_stop_runtimeerror"
+    assert "private disconnect details" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_failure_closes_http_client() -> None:
+    clients: list[FakeTikTokClient] = []
+
+    class FailingStartupClient(FakeTikTokClient):
+        async def start(self, *, fetch_live_check: bool = True) -> asyncio.Task[None]:
+            self.started = True
+            self.fetch_live_check = fetch_live_check
+            raise RuntimeError("private startup details")
+
+    def factory(*, unique_id: str) -> FakeTikTokClient:
+        client = FailingStartupClient(unique_id=unique_id)
+        clients.append(client)
+        return client
+
+    adapter = TikTokLiveAdapter(
+        FakeIngestionService(),
+        enabled=True,
+        username="streamer",
+        bindings=TikTokLiveBindings(
+            client_factory=factory,
+            event_types=EVENT_BINDINGS,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="private startup details"):
+        await adapter.start()
+
+    assert len(clients) == 1
+    assert clients[0].disconnected is True
+    assert clients[0].close_client is False
+    assert clients[0].web.closed is True
+    assert adapter.snapshot()["status"] == "failed"
+    assert adapter.snapshot()["last_error_code"] == "provider_start_runtimeerror"
 
 
 @pytest.mark.asyncio
@@ -300,6 +426,8 @@ async def test_connection_failure_marks_provider_failed_without_exposing_excepti
 
     assert clients[0].disconnected is True
     assert adapter.snapshot()["status"] == "stopped"
+    assert clients[0].close_client is False
+    assert clients[0].web.closed is True
 
 
 @pytest.mark.asyncio
@@ -499,6 +627,8 @@ def test_provider_startup_activates_diagnostics_before_listener_and_stops_it_on_
 
     assert clients[0].disconnected is True
     assert adapter.snapshot()["status"] == "stopped"
+    assert clients[0].close_client is False
+    assert clients[0].web.closed is True
     assert app.state.engine_runtime.state()["active_experience"] is None
 
 

@@ -41,8 +41,17 @@ class EventIngestionPort(Protocol):
     async def ingest(self, event: LiveEvent) -> object: ...
 
 
+class TikTokLiveWebClientProtocol(Protocol):
+    """Public HTTP client interface exposed by TikTokLiveClient.web."""
+
+    async def close(self) -> None: ...
+
+
 class TikTokLiveClientProtocol(Protocol):
     """Small subset of the TikTokLive client API used by this adapter."""
+
+    @property
+    def web(self) -> TikTokLiveWebClientProtocol: ...
 
     def add_listener(
         self, event_type: type[object], listener: Callable[[object], Awaitable[None]]
@@ -254,15 +263,20 @@ class TikTokLiveAdapter:
                 # Do not claim a connection just because the SDK start method returned.
             except BaseException as exc:
                 failed_client = self._client
+                cleanup_cancelled = False
+
                 if failed_client is not None:
                     try:
-                        await asyncio.wait_for(
-                            failed_client.disconnect(close_client=True),
-                            timeout=min(self._shutdown_timeout_seconds, 2.0),
+                        await self._disconnect_and_close_client(
+                            failed_client,
+                            timeout_seconds=min(self._shutdown_timeout_seconds, 2.0),
                         )
-                    except BaseException:
+                    except asyncio.CancelledError:
+                        cleanup_cancelled = True
+                    except Exception:
                         # Preserve the startup failure; cleanup remains best-effort.
                         pass
+
                 self._status = "failed"
                 self._last_error_code = _safe_error_code(exc, prefix="provider_start")
                 self._client = None
@@ -270,6 +284,10 @@ class TikTokLiveAdapter:
                     "TikTok LIVE provider failed to start",
                     extra={"provider": "tiktok", "error_code": self._last_error_code},
                 )
+
+                if cleanup_cancelled and not isinstance(exc, asyncio.CancelledError):
+                    raise asyncio.CancelledError from exc
+
                 raise
 
     async def stop(self) -> None:
@@ -284,9 +302,9 @@ class TikTokLiveAdapter:
             monitor_task = self._monitor_task
             try:
                 if client is not None:
-                    await asyncio.wait_for(
-                        client.disconnect(close_client=True),
-                        timeout=self._shutdown_timeout_seconds,
+                    await self._disconnect_and_close_client(
+                        client,
+                        timeout_seconds=self._shutdown_timeout_seconds,
                     )
             except asyncio.CancelledError:
                 raise
@@ -310,6 +328,46 @@ class TikTokLiveAdapter:
                 self._monitor_task = None
                 self._status = "stopped" if self._enabled else "disabled"
                 self._stopping = False
+
+    async def _disconnect_and_close_client(
+        self,
+        client: TikTokLiveClientProtocol,
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        """Disconnect the WebSocket and close HTTP without nested event-loop cleanup."""
+
+        cancellation_error: asyncio.CancelledError | None = None
+        cleanup_error: Exception | None = None
+
+        try:
+            await asyncio.wait_for(
+                client.disconnect(close_client=False),
+                timeout=timeout_seconds,
+            )
+        except asyncio.CancelledError as exc:
+            cancellation_error = exc
+        except Exception as exc:
+            cleanup_error = exc
+
+        # Always attempt to close the HTTP client, even if disconnect failed.
+        try:
+            await asyncio.wait_for(
+                client.web.close(),
+                timeout=timeout_seconds,
+            )
+        except asyncio.CancelledError as exc:
+            if cancellation_error is None:
+                cancellation_error = exc
+        except Exception as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+
+        if cancellation_error is not None:
+            raise cancellation_error
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def _build_handler(self, event_type: EventType) -> Callable[[object], Awaitable[None]]:
         async def handler(provider_event: object) -> None:

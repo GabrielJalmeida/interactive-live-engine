@@ -2,7 +2,7 @@
 
 Infraestrutura modular e reutilizável para desenvolver experiências interativas controladas por eventos de transmissões ao vivo.
 
-**Estado atual:** Fase 6 — adaptador TikTok LIVE implementado com testes locais; validação com transmissão real pendente para uma sessão agendada. O provider permanece desabilitado por padrão. A entrega durável de outputs ainda não foi implementada.
+**Estado atual:** Fase 6 — adaptador TikTok LIVE validado em sessões reais em 16/10/2026. Conexão, eventos reais e shutdown após correção foram observados. A suíte possui 105 testes aprovados. O provider permanece desabilitado por padrão; reconexão automática, validação de operação prolongada e entrega durável de outputs continuam pendentes.
 
 ## Princípios
 
@@ -56,7 +56,7 @@ WebSocket: `ws://127.0.0.1:8000/ws/events` (use `wss://` quando servido por HTTP
 
 ## Provider TikTok LIVE — Fase 6
 
-A integração usa `TikTokLive==7.0.1` como dependência opcional, sem obrigar sua instalação nos ambientes que utilizam somente o Core. O SDK é importado sob demanda, quando `TIKTOK_LIVE_ENABLED=true`. Por padrão, nenhum listener é iniciado nem há conexão com o TikTok. A biblioteca é um cliente de terceiros não oficial, baseado no Webcast interno e sujeito a mudanças do TikTok. Embora o pacote declare `Requires-Python >=3.10`, seus classifiers publicados chegam ao Python 3.13. Neste ambiente com Python 3.14, a instalação e o teste básico de importação foram concluídos com sucesso; a compatibilidade operacional com uma transmissão real ainda precisa ser validada na sessão agendada. Fonte: https://pypi.org/project/TikTokLive/.
+A integração usa `TikTokLive==7.0.1` como dependência opcional, sem obrigar sua instalação nos ambientes que utilizam somente o Core. O SDK é importado sob demanda, quando `TIKTOK_LIVE_ENABLED=true`. Por padrão, nenhum listener é iniciado nem há conexão com o TikTok. A biblioteca é um cliente de terceiros não oficial, baseado no Webcast interno e sujeito a mudanças do TikTok. Embora o pacote declare `Requires-Python >=3.10`, seus classifiers publicados chegam ao Python 3.13. Neste ambiente com Python 3.14, a instalação, o teste básico de importação e duas sessões reais foram concluídos com sucesso em Python 3.14. Foram observados eventos CONNECT, COMMENT, FOLLOW, JOIN e LIKE. O shutdown foi revalidado após uma correção do adaptador. Isso não comprova todos os tipos de evento, operação prolongada ou comportamento offline/transitório. Fonte: https://pypi.org/project/TikTokLive/.
 
 Para preparar o ambiente (não abre uma live nem conecta ao TikTok):
 
@@ -84,7 +84,7 @@ O estado operacional fica disponível em `GET /api/v1/providers/tiktok`, com est
 
 **Dados e retenção:** eventos normalizados seguem a política de persistência da Engine. Comentários e identidade mapeada do viewer podem ficar gravados em `live_event_records` até a expiração da retenção padrão de 7 dias. Proteja o arquivo do banco e seus backups, e execute o script de expurgo documentado. A Experience de diagnóstico não repete o texto do comentário nem o nome/identidade do usuário nos outputs, mas isso não significa que esses dados sejam removidos da persistência.
 
-**Limite conhecido:** a Engine não inclui uma Experience de gameplay padrão. Para o primeiro teste real, `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=true`, em development/test, permite registrar e iniciar automaticamente uma Experience de diagnóstico quando nenhuma outra está ativa. Esse modo verifica o fluxo de eventos sem implementar gameplay. Para jogar de verdade, será necessário desenvolver, registrar e iniciar uma Experience própria. Esta fase possui testes automatizados com fakes, mas ainda não valida conectividade real, recebimento de eventos reais, comportamento após mudanças no TikTok ou reconexão automática. A estratégia de reconexão/backoff será decidida com base nas evidências do primeiro teste real.
+**Limite conhecido:** a Engine ainda não inclui uma Experience de gameplay padrão. A Experience `provider-diagnostics` foi usada para validar o fluxo real sem implementar gameplay. Em 16/10/2026, foram observados CONNECT, COMMENT, FOLLOW, JOIN e LIKE; GIFT, SHARE, comportamento offline/transitório e operação prolongada ainda não foram validados. A correção do shutdown foi testada automaticamente e confirmada em uma segunda sessão real. Reconexão/backoff automático continua não implementado e será decidido conforme a necessidade demonstrada.
 
 **Licença da dependência:** TikTokLive informa uma licença modificada AGPL-3.0. Antes de distribuir uma aplicação comercial/fechada que a incorpore, revise a licença completa e sua exceção de integração com aconselhamento apropriado; a dependência opcional isolada não elimina essa obrigação.
 
@@ -148,7 +148,7 @@ python -m ruff format --check .
 
 ## Segurança e escopo
 
-O provider TikTok permanece desativado por padrão e sua conexão real ainda não foi validada. A Experience `provider-diagnostics` é uma ferramenta opt-in de desenvolvimento/teste, nunca registrada automaticamente no setup normal e indisponível em production. A deduplicação é persistente no banco configurado quando usada a store SQLAlchemy; testes podem usar a store em memória. O realtime usa entrega em memória e best-effort: desconexão significa que uma mensagem pode ser perdida; replay, outbox e entrega durável continuam fora do MVP atual. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.
+O provider TikTok permanece desativado por padrão. Em sessões controladas de 16/10/2026, foram observados conexão real e eventos CONNECT, COMMENT, FOLLOW, JOIN e LIKE; o shutdown após a correção encerrou sem o warning anterior. A Experience `provider-diagnostics` é opt-in e inicia automaticamente apenas quando `TIKTOK_LIVE_ENABLED=true` e `TIKTOK_LIVE_DIAGNOSTICS_ENABLED=true` em development/test e nenhuma Experience está ativa; está indisponível em production. A deduplicação é persistente no banco configurado quando usada a store SQLAlchemy; testes podem usar a store em memória. O realtime usa entrega em memória e best-effort: desconexão significa que uma mensagem pode ser perdida; replay, outbox e entrega durável continuam fora do MVP atual. Não adicione segredos ao `.env.example`; o arquivo `.env` local é ignorado pelo Git.
 
 ### Fase 6 — TikTok LIVE provider
 
@@ -157,5 +157,6 @@ O provider TikTok permanece desativado por padrão e sua conexão real ainda nã
 - [x] Configuração opt-in; listener desativado por padrão.
 - [x] Testes automatizados sem conexão real.
 - [x] Instalar e verificar a dependência opcional no ambiente Python atual.
-- [ ] Ativar uma Experience adequada e validar conexão/eventos em uma live real numa sessão agendada.
-- [ ] Decidir reconexão/backoff com evidência do primeiro teste real.
+- [x] Ativar a Experience de diagnóstico e validar conexão/eventos reais em 16/10/2026.
+- [x] Corrigir e validar o shutdown real do provider na segunda sessão (`66b1e6e`).
+- [ ] Decidir, com base nas sessões reais, se a Engine precisa de reconexão/backoff automático; se aprovado, implementar e testar.

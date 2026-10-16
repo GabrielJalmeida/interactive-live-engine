@@ -254,6 +254,55 @@ async def test_connection_task_completion_updates_status_even_without_connect_ev
 
 
 @pytest.mark.asyncio
+async def test_connection_failure_marks_provider_failed_without_exposing_exception(
+    caplog,
+) -> None:
+    clients: list[FakeTikTokClient] = []
+
+    class FailingConnectionClient(FakeTikTokClient):
+        async def start(self, *, fetch_live_check: bool = True) -> asyncio.Task[None]:
+            self.started = True
+            self.fetch_live_check = fetch_live_check
+
+            async def fail() -> None:
+                raise RuntimeError("private connection details")
+
+            self.connection_task = asyncio.create_task(fail())
+            return self.connection_task
+
+    def factory(*, unique_id: str) -> FakeTikTokClient:
+        client = FailingConnectionClient(unique_id=unique_id)
+        clients.append(client)
+        return client
+
+    adapter = TikTokLiveAdapter(
+        FakeIngestionService(),
+        enabled=True,
+        username="streamer",
+        bindings=TikTokLiveBindings(
+            client_factory=factory,
+            event_types=EVENT_BINDINGS,
+        ),
+    )
+
+    await adapter.start()
+    monitor_task = adapter._monitor_task
+    assert monitor_task is not None
+
+    await monitor_task
+
+    state = adapter.snapshot()
+    assert state["status"] == "failed"
+    assert state["last_error_code"] == "provider_connection_runtimeerror"
+    assert "private connection details" not in caplog.text
+
+    await adapter.stop()
+
+    assert clients[0].disconnected is True
+    assert adapter.snapshot()["status"] == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_unexpected_connection_cancellation_marks_provider_failed() -> None:
     clients: list[FakeTikTokClient] = []
     adapter = TikTokLiveAdapter(

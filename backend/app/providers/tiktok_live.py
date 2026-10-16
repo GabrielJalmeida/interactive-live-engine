@@ -289,16 +289,6 @@ class TikTokLiveAdapter:
                         timeout=self._shutdown_timeout_seconds,
                     )
             except asyncio.CancelledError:
-                if not self._stopping:
-                    self._status = "failed"
-                    self._last_error_code = "provider_connection_cancelled"
-                    self._logger.error(
-                        "TikTok LIVE connection task was cancelled unexpectedly",
-                        extra={
-                            "provider": "tiktok",
-                            "error_code": self._last_error_code,
-                        },
-                    )
                 raise
             except Exception as exc:
                 self._last_error_code = _safe_error_code(exc, prefix="provider_stop")

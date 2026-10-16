@@ -544,6 +544,36 @@ def test_tiktok_settings_require_a_username_only_when_enabled() -> None:
     assert configured.tiktok_live_username == "MyChannel"
 
 
+def test_empty_username_in_env_file_is_ignored_when_provider_disabled(
+    tmp_path, monkeypatch
+) -> None:
+    for variable in (
+        "APP_ENV",
+        "DATABASE_URL",
+        "TIKTOK_LIVE_ENABLED",
+        "TIKTOK_LIVE_USERNAME",
+        "TIKTOK_LIVE_DIAGNOSTICS_ENABLED",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "APP_ENV=test\n"
+        "DATABASE_URL=sqlite:///./data/test.db\n"
+        "TIKTOK_LIVE_ENABLED=false\n"
+        "TIKTOK_LIVE_USERNAME=\n"
+        "TIKTOK_LIVE_DIAGNOSTICS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.app_env == "test"
+    assert settings.tiktok_live_enabled is False
+    assert settings.tiktok_live_username is None
+    assert settings.tiktok_live_diagnostics_enabled is False
+
+
 def test_provider_status_endpoint_is_safe_when_provider_is_disabled() -> None:
     client = TestClient(create_app(Settings(_env_file=None, app_env="test")))
 

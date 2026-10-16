@@ -1,16 +1,16 @@
 """Persistence and migration integration tests using isolated temporary SQLite databases."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from backend.app.domain.events import EventProvider, EventType, LiveEvent, OutputEvent
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
 from backend.app.application.event_ingestion import EventIngestionService, EventPublicationError
+from backend.app.domain.events import EventProvider, EventType, LiveEvent, OutputEvent
 from backend.app.persistence.database import create_database_engine, create_session_factory
 from backend.app.persistence.event_repository import SqlAlchemyEventStore
 from backend.app.persistence.models import Base, EventDeduplicationKey
@@ -243,7 +243,8 @@ def test_retention_purge_removes_old_history_and_its_dedupe_claim(tmp_path: Path
         event = make_event("expire-me")
         try:
             assert await store.reserve(event) is None
-            deleted = await store.purge_expired_before(datetime(2026, 10, 16, tzinfo=UTC))
+            cutoff = event.received_at + timedelta(seconds=1)
+            deleted = await store.purge_expired_before(cutoff)
             assert deleted == 1
             assert await store.get_record(event.event_id) is None
             assert await store.count_records() == 0

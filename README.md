@@ -1,3 +1,8 @@
+
+<div align="center">
+  <img src="docs/live.banner.png" alt="Interactive Live Engine" width="100%">
+</div>
+
 # Interactive Live Engine
 
 Infraestrutura modular e reutilizável para desenvolver experiências interativas controladas por eventos de transmissões ao vivo.
